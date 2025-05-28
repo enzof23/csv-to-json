@@ -1,0 +1,177 @@
+# .github/workflows/ci-cd.yml
+
+name: CI/CD Pipeline for Work Order Service
+
+# Controls when the workflow will run
+on:
+  push:
+    branches:
+      - main # For production deployment
+      - develop # For staging deployment
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  # Job 1: Linting (conceptual) and Testing
+  lint_test:
+    name: Lint and Test
+    runs-on: ubuntu-latest # Use the latest Ubuntu runner
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x] # Test on multiple Node.js versions
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4 # Action to checkout your repository
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm" # Cache npm dependencies
+
+      - name: Install dependencies
+        run: npm ci # Use 'ci' for cleaner installs in CI environments
+
+      # Placeholder for Linting - uncomment and configure if you add a linter
+      # - name: Run Linter
+      #   run: npm run lint # Assuming you have a lint script in package.json
+
+      - name: Run tests
+        run: npm test
+        env: # Environment variables needed for tests
+          API_KEY: ${{ secrets.TEST_API_KEY || 'SECRET_API_KEY_123' }} # Use a test-specific or default key
+          API_BASE_URL: ${{ secrets.TEST_API_BASE_URL || 'http://localhost:3000' }}
+          # PORT: ${{ secrets.TEST_PORT || 3000 }} # If your tests need a specific port
+
+  # Job 2: Build the application
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+    needs: lint_test # This job runs only if lint_test succeeds
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x # Use a specific Node version for building
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build # This should compile TS to JS in 'dist/'
+
+      - name: Archive production artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-files # Name of the artifact
+          path: | # Paths to include in the artifact
+            dist/
+            package.json
+            package-lock.json
+            # Add .env.example or any other files needed for runtime, but NOT .env itself
+
+  # Job 3: Deploy to Staging Environment
+  deploy_staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build # Runs after a successful build
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push' # Only on push to 'develop'
+
+    environment: # Define the environment for protection rules and secrets
+      name: staging
+      url: ${{ secrets.STAGING_APP_URL }} # Valid syntax for GitHub Actions
+
+    steps:
+      - name: Checkout code (optional, if needed by deploy script)
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-files
+          path: ./deploy_package # Download to a specific directory
+
+      - name: Configure Staging Environment
+        run: |
+          echo "Setting up staging environment variables..."
+          # This is conceptual; actual method depends on your deployment target.
+          # If your deployment target reads a .env file, you can construct it here from secrets.
+          # Otherwise, your deployment script itself should use the secrets passed via 'env' context.
+          echo "PORT=${{ secrets.STAGING_PORT || 3000 }}" > ./deploy_package/.env
+          echo "NODE_ENV=staging" >> ./deploy_package/.env
+          echo "API_KEY=${{ secrets.STAGING_API_KEY }}" >> ./deploy_package/.env
+          echo "API_BASE_URL=${{ secrets.STAGING_API_BASE_URL }}" >> ./deploy_package/.env
+          # Add other staging-specific vars like SFTP details if the migration service runs here
+          # echo "SFTP_HOST=${{ secrets.STAGING_SFTP_HOST }}" >> ./deploy_package/.env
+
+      - name: Deploy to Staging Server/Platform
+        run: |
+          echo "Deploying API to Staging..."
+          # Replace with your actual deployment commands for the API
+          # e.g., scp -r ./deploy_package/* user@staging-server:/path/to/app
+          # e.g., eb deploy staging-environment
+          echo "Deploying/Configuring Migration Service for Staging..."
+          # Replace with commands to deploy/update the migration service
+          echo "Deployment to Staging complete."
+        env: # Pass secrets to your deployment script's environment
+          STAGING_API_KEY: ${{ secrets.STAGING_API_KEY }}
+          STAGING_API_BASE_URL: ${{ secrets.STAGING_API_BASE_URL }}
+          STAGING_PORT: ${{ secrets.STAGING_PORT }}
+          # Add any other secrets your deployment script needs
+          # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+
+  # Job 4: Deploy to Production Environment
+  deploy_production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build # Runs after a successful build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' # Only on push to 'main'
+
+    environment: # Define the environment for protection rules and secrets
+      name: production
+      url: ${{ secrets.PRODUCTION_APP_URL }} # Valid syntax for GitHub Actions
+
+    steps:
+      - name: Checkout code (optional, if needed by deploy script)
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-files
+          path: ./deploy_package
+
+      - name: Configure Production Environment
+        run: |
+          echo "Setting up production environment variables..."
+          echo "PORT=${{ secrets.PRODUCTION_PORT || 3000 }}" > ./deploy_package/.env
+          echo "NODE_ENV=production" >> ./deploy_package/.env
+          echo "API_KEY=${{ secrets.PRODUCTION_API_KEY }}" >> ./deploy_package/.env
+          echo "API_BASE_URL=${{ secrets.PRODUCTION_API_BASE_URL }}" >> ./deploy_package/.env
+          # Add other production-specific vars
+          # echo "SFTP_HOST=${{ secrets.PRODUCTION_SFTP_HOST }}" >> ./deploy_package/.env
+
+      - name: Deploy to Production Server/Platform
+        run: |
+          echo "Deploying API to Production..."
+          # Replace with your actual deployment commands for the API
+          echo "Deploying/Configuring Migration Service for Production..."
+          # Replace with commands to deploy/update the migration service
+          echo "Deployment to Production complete."
+        env: # Pass secrets to your deployment script's environment
+          PRODUCTION_API_KEY: ${{ secrets.PRODUCTION_API_KEY }}
+          PRODUCTION_API_BASE_URL: ${{ secrets.PRODUCTION_API_BASE_URL }}
+          PRODUCTION_PORT: ${{ secrets.PRODUCTION_PORT }}
+          # Add any other secrets your deployment script needs
+          # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID_PRODUCTION }}
+          # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY_PRODUCTION }}
