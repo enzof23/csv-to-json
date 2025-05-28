@@ -79,8 +79,8 @@ The project is organised into the following main directories:
 1. **Clone the repository:**
 
    ```bash
-   git clone <repository-url>
-   cd <repository-name>
+   git clone https://github.com/enzof23/csv-to-json.git
+   cd csv-to-json
    ```
 
 2. **Install dependencies:**
@@ -157,16 +157,16 @@ Uses `.env` files loaded by `dotenv` for variables like `PORT`, `API_KEY`, and `
 
 #### Staging & Production Environments
 
-Environment variables will be injected directly into the runtime environment by the hosting platform (e.g., AWS Elastic Beanstalk, Heroku, Kubernetes/Docker environment variables) or a secrets management service (e.g., AWS Secrets Manager, HashiCorp Vault, GitHub Secrets).
+Environment variables will be injected directly into the runtime environment by the hosting platform or a secrets management service. **GitHub Secrets** are used within the CI/CD pipeline to manage environment-specific variables for Staging and Production.
 
 We will have distinct sets of variables for each environment:
 
-- `PORT`: Port for the API server
+- `PORT`: Port for the API server (`STAGING_PORT`, `PRODUCTION_PORT`)
 - `NODE_ENV`: Set to `staging` or `production`
-- `API_KEY`: Different, strong API keys for staging and production
-- `API_BASE_URL`: The canonical URL for the API in that environment (e.g., `https://staging-api.example.com`, `https://api.example.com`)
-- `SFTP_HOST`, `SFTP_USER`, `SFTP_PRIVATE_KEY_PATH` (or content): For a real SFTP setup, these would be securely managed
-- Logging levels and external service URLs (if any) would also be environment-specific
+- `API_KEY`: Different, strong API keys (`STAGING_API_KEY`, `PRODUCTION_API_KEY`)
+- `API_BASE_URL`: The canonical URL for the API (`STAGING_API_BASE_URL`, `PRODUCTION_API_BASE_URL`)
+- `APP_URL`: The public URL of the deployed application (`STAGING_APP_URL`, `PRODUCTION_APP_URL`)
+- (If using real SFTP) `SFTP_HOST`, `SFTP_USER`, etc., would also be managed via secrets.
 
 > **Important:** Never commit `.env` files with production secrets to the repository.
 
@@ -174,76 +174,61 @@ We will have distinct sets of variables for each environment:
 
 The `package.json` includes the following relevant scripts:
 
-- `"build": "tsc"`: Compiles the TypeScript project to JavaScript in the `dist/` directory. This is run by the CI/CD pipeline before deployment
-- `"start:api": "node dist/api/server.js"`: Starts the API server from the compiled JavaScript. This would be used in production/staging, likely managed by a process manager like PM2 or the deployment platform's service manager
-- `"dev:api": "ts-node src/api/server.ts"`: Runs the API using `ts-node` for local development, enabling live reloading
-- `"migrate": "ts-node src/integration-service/service.ts"`: Runs the integration service locally using `ts-node` for testing the migration flow
-- `"migrate:prod": "node dist/integration-service/service.js"` (Conceptual): This script would run the compiled integration service. It would typically be invoked as a scheduled task (e.g., cron job, AWS Lambda scheduled event, Kubernetes CronJob)
-- `"test": "jest --detectOpenHandles"`: Runs all automated tests
+- `"build": "tsc"`: Compiles the TypeScript project to JavaScript in the `dist/` directory.
+- `"start:api": "node dist/api/server.js"`: Starts the API server from the compiled JavaScript, suitable for production/staging.
+- `"dev:api": "ts-node src/api/server.ts"`: Runs the API using `ts-node` for local development.
+- `"migrate": "ts-node src/integration-service/service.ts"`: Runs the integration service locally.
+- `"test": "jest --detectOpenHandles"`: Runs all automated tests.
 
 ### 3. CI/CD Pipeline (GitHub Actions)
 
-We will use GitHub Actions to automate testing and deployment. A typical workflow (`.github/workflows/ci-cd.yml`) would include:
+We use the GitHub Actions workflow defined in `.github/workflows/ci-cd.yml` to automate testing and deployment based on the following strategy:
 
-#### Branching Strategy (Assumed)
+#### Branching Strategy
 
-- `develop` branch: Code pushed here is deployed to the Staging environment
-- `main` branch: Code merged here (typically from `develop` after successful staging tests) is deployed to the Production environment
-- Feature branches: Created off `develop` for new features/fixes, merged back into `develop` via Pull Requests
-
-#### Workflow Triggers
-
-- On push to `develop` (for staging deployment)
-- On push to `main` (for production deployment, possibly after a manual approval step)
-- On pull requests targeting `develop` or `main` (to run tests)
+- `develop` branch: Code pushed here is deployed to the Staging environment.
+- `main` branch: Code pushed here is deployed to the Production environment.
+- Pull Requests (targeting `develop` or `main`): Trigger the `lint_test` job.
 
 #### Workflow Jobs & Steps
 
-##### Lint & Test Job
+The pipeline consists of several jobs:
 
-Runs on pushes to all relevant branches & PRs:
+1.  **`lint_test` (Lint and Test)**:
 
-1. `actions/checkout@vX`: Checks out the code
-2. `actions/setup-node@vX`: Sets up the desired Node.js version
-3. `npm ci`: Installs dependencies cleanly
-4. `npm run lint` (Conceptual - if linters like ESLint/Prettier are configured): Checks code style
-5. `npm test`: Runs all automated tests (unit, integration). If tests fail, the workflow fails, preventing deployment
+    - **Trigger:** Runs on push to `main`/`develop` and on pull requests to these branches.
+    - **Matrix:** Tests across multiple Node.js versions (18.x, 20.x).
+    - **Steps:**
+      - Checks out the code.
+      - Sets up Node.js and caches npm dependencies.
+      - Installs dependencies using `npm ci`.
+      - Runs tests using `npm test` with test-specific environment variables (from secrets or defaults).
+      - _(Includes a placeholder for a linting step, currently commented out)_.
 
-##### Build Job
+2.  **`build` (Build Application)**:
 
-Runs if Lint & Test passes:
+    - **Trigger:** Runs after `lint_test` succeeds.
+    - **Steps:**
+      - Checks out the code.
+      - Sets up Node.js (20.x) and installs dependencies.
+      - Builds the TypeScript project (`npm run build`).
+      - Archives the `dist/` folder, `package.json`, and `package-lock.json` as an artifact named `dist-files`.
 
-1. (Inherits from previous job or runs in parallel if dependencies are managed)
-2. `npm run build`: Compiles TypeScript to JavaScript
-3. (Optional) `docker build ...`: If containerising, build a Docker image
-4. (Optional) Push Docker image to a registry (e.g., Docker Hub, AWS ECR, GitHub Container Registry)
-5. Upload build artifacts (e.g., `dist` folder or Docker image ID) for deployment jobs
+3.  **`deploy_staging` (Deploy to Staging)**:
 
-##### Deploy to Staging Job
+    - **Trigger:** Runs after `build` succeeds, but _only_ on a push event to the `develop` branch.
+    - **Environment:** Uses the `staging` environment in GitHub (allowing for specific secrets and protection rules).
+    - **Steps:**
+      - Downloads the `dist-files` artifact.
+      - Configures the staging environment by creating a `.env` file within the deployment package, populating it with `STAGING_*` secrets.
+      - Runs conceptual deployment commands (placeholders for actual deployment like `scp`, `eb deploy`, etc.), passing secrets as environment variables.
 
-Runs if Build passes, triggered by push to `develop`:
+4.  **`deploy_production` (Deploy to Production)**:
+    - **Trigger:** Runs after `build` succeeds, but _only_ on a push event to the `main` branch.
+    - **Environment:** Uses the `production` environment in GitHub.
+    - **Steps:**
+      - Downloads the `dist-files` artifact.
+      - Configures the production environment by creating a `.env` file, populating it with `PRODUCTION_*` secrets.
+      - Runs conceptual deployment commands for production.
 
-1. Download build artifacts
-2. **Configure Staging Environment:**
-   - Use GitHub Secrets to inject staging-specific environment variables (`STAGING_API_KEY`, `STAGING_API_URL`, SFTP details for staging if different)
-3. **Deploy API:**
-   - Could be via SSH & PM2, or platform-specific commands (e.g., `eb deploy` for Elastic Beanstalk, `heroku deploy`, `kubectl apply` for Kubernetes)
-4. **Deploy/Configure Migration Service:**
-   - If it's a scheduled task, update the task definition or code (e.g., update AWS Lambda function, update cron job script on a server)
-5. (Optional) Run Smoke Tests/E2E Tests against the staging environment
-
-##### Deploy to Production Job
-
-Runs if Build passes, triggered by push/merge to `main`, potentially with manual approval:
-
-1. (Optional) **Manual Approval Step:** Use GitHub Action's environment feature with required reviewers
-2. Download build artifacts
-3. **Configure Production Environment:**
-   - Use GitHub Secrets for production-specific environment variables
-4. **Deploy API:**
-   - Similar deployment mechanisms as staging, but to the production infrastructure. Consider blue/green or canary deployment strategies for zero-downtime updates
-5. **Deploy/Configure Migration Service:**
-   - Update the production scheduled task
-6. (Optional) Run Smoke Tests against the production environment
-
-This CI/CD pipeline ensures that every change is automatically tested, built, and can be reliably deployed to staging for further verification before reaching production, minimising risks and improving development velocity.
+This CI/CD pipeline ensures that every change is automatically tested and built. It provides a clear path for deploying to staging for verification before releasing to production, enhancing reliability and development speed.
