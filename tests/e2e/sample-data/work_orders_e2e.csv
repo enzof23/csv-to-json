@@ -1,0 +1,4 @@
+order_ref,client_org_name,client_contact_name,client_phone_num,site_full_address,site_notes,job_date,job_time,task_identifier,task_description,task_hours_estimate
+E2E-001,E2E Test Corp,Tester One,111222333,"1 Test St, Sydney, NSW 2000",Note 1,2025-10-01,10:00,TASK-A,"Task Alpha",1.5
+E2E-001,E2E Test Corp,Tester One,111222333,"1 Test St, Sydney, NSW 2000",Note 1,2025-10-01,10:00,TASK-B,"Task Bravo",2
+E2E-002,Another Client,Tester Two,444555666,"2 Sample Ave, Melbourne, VIC 3000",Note 2,2025-10-02,11:30,TASK-C,"Task Charlie",3
